@@ -18,13 +18,14 @@ main{max-width:920px;margin:28px auto 60px;padding:0 20px}
 .pdf:last-child{border-bottom:0}.pdf:hover{background:#f7fcfd}.open{font-size:12px;color:#008eaa;font-weight:700}
 .empty,.error{background:#fff;border:1px solid #dbe5ee;border-radius:12px;padding:24px;color:var(--muted)}
 .error{color:#9b1c1c;border-color:#fecaca;background:#fff7f7}
+.rev{font-size:11px;color:var(--muted);margin:0 0 14px 4px}
 footer{max-width:920px;margin:0 auto 30px;padding:0 20px;color:var(--muted);font-size:11px}
 </style>
 </head>
 <body>
 <header><div class="wrap"><h1>Flash_Lab Logbook</h1><div class="sub">Public laboratory logbook</div></div></header>
 <main id="content"><div class="empty">Loading current logbook…</div></main>
-<footer>Live view of the current public GitHub repository.</footer>
+<footer>PDF links are pinned to the current Git commit to avoid stale cached revisions.</footer>
 <script>
 const owner='curcioa', repo='FLASH_LAB-Logbook', branch='main';
 const monthNum={January:1,February:2,March:3,April:4,May:5,June:6,July:7,August:8,September:9,October:10,November:11,December:12};
@@ -32,24 +33,31 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const monthKey=n=>{const m=n.match(/^([A-Za-z]+)(\d{4})$/);return m?[+m[2],monthNum[m[1]]||0]:[0,0]};
 const dateKey=n=>{const m=n.match(/^Logbook(\d{2})(\d{2})(\d{4})\.pdf$/);return m?[+m[3],+m[2],+m[1]]:[0,0,0]};
 const cmp=(a,b)=>{for(let i=0;i<a.length;i++){if(a[i]!==b[i])return b[i]-a[i]}return 0};
-async function api(path){const r=await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,{cache:'no-store'});if(!r.ok)throw new Error(`GitHub API ${r.status}`);return r.json()}
+const encPath=p=>p.split('/').map(encodeURIComponent).join('/');
+async function gh(path){const sep=path.includes('?')?'&':'?';const r=await fetch(`https://api.github.com/repos/${owner}/${repo}${path}${sep}_=${Date.now()}`,{cache:'no-store',headers:{Accept:'application/vnd.github+json'}});if(!r.ok)throw new Error(`GitHub API ${r.status}`);return r.json()}
 (async()=>{
   try{
-    const root=await api('');
-    const months=root.filter(x=>x.type==='dir'&&/^[A-Za-z]+\d{4}$/.test(x.name)).sort((a,b)=>cmp(monthKey(a.name),monthKey(b.name)));
+    const commit=await gh(`/commits/${branch}`);
+    const commitSha=commit.sha;
+    const treeSha=commit.commit.tree.sha;
+    const tree=await gh(`/git/trees/${treeSha}?recursive=1`);
+    const pdfs=(tree.tree||[]).filter(x=>x.type==='blob'&&/^[A-Za-z]+\d{4}\/Logbook\d{8}\.pdf$/.test(x.path));
+    const groups=new Map();
+    for(const f of pdfs){const [month,name]=f.path.split('/');if(!groups.has(month))groups.set(month,[]);groups.get(month).push({name,path:f.path});}
+    const months=[...groups.keys()].sort((a,b)=>cmp(monthKey(a),monthKey(b)));
     const sections=[];
+    sections.push(`<div class="rev">Current repository revision: ${esc(commitSha.slice(0,10))}</div>`);
     for(const month of months){
-      const files=(await api(encodeURIComponent(month.name))).filter(x=>x.type==='file'&&/^Logbook\d{8}\.pdf$/.test(x.name)).sort((a,b)=>cmp(dateKey(a.name),dateKey(b.name)));
-      if(!files.length)continue;
+      const files=groups.get(month).sort((a,b)=>cmp(dateKey(a.name),dateKey(b.name)));
       const links=files.map(f=>{
         const m=f.name.match(/^Logbook(\d{2})(\d{2})(\d{4})\.pdf$/); const label=m?`${m[1]}/${m[2]}/${m[3]}`:f.name;
-        const href=`${f.download_url}${f.download_url.includes('?')?'&':'?'}v=${f.sha}`;
-        return `<a class="pdf" href="${esc(href)}" target="_blank" rel="noopener"><span>${esc(label)}</span><span class="open">Open PDF ↗</span></a>`;
+        const href=`https://raw.githubusercontent.com/${owner}/${repo}/${commitSha}/${encPath(f.path)}`;
+        return `<a class="pdf" href="${esc(href)}" target="_blank" rel="noopener"><span>${esc(label)}</span><span class="open">Open latest PDF ↗</span></a>`;
       }).join('');
-      sections.push(`<section class="month"><h2>${esc(month.name)}</h2><div class="pdf-list">${links}</div></section>`);
+      sections.push(`<section class="month"><h2>${esc(month)}</h2><div class="pdf-list">${links}</div></section>`);
     }
-    document.getElementById('content').innerHTML=sections.join('')||'<div class="empty">No public logbook PDFs yet.</div>';
-  }catch(e){document.getElementById('content').innerHTML=`<div class="error">Could not load the live logbook list. ${esc(e.message)}</div>`}
+    document.getElementById('content').innerHTML=pdfs.length?sections.join(''):'<div class="empty">No public logbook PDFs yet.</div>';
+  }catch(e){document.getElementById('content').innerHTML=`<div class="error">Could not load the current logbook. ${esc(e.message)}</div>`}
 })();
 </script>
 </body>
